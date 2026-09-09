@@ -1,0 +1,4 @@
+/cronlint
+*.test
+*.out
+.DS_Store
