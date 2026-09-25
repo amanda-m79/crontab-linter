@@ -28,6 +28,10 @@ type fieldSpec struct {
 	min   int
 	max   int
 	names map[string]int
+	// allowQuestionMark permits "?" as a "no specific value" wildcard,
+	// the Quartz convention for the field of day-of-month/day-of-week
+	// that isn't otherwise restricted.
+	allowQuestionMark bool
 }
 
 var monthNames = map[string]int{
@@ -39,13 +43,34 @@ var dowNames = map[string]int{
 	"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6,
 }
 
-var fields = []fieldSpec{
-	{"minute", 0, 59, nil},
-	{"hour", 0, 23, nil},
-	{"day-of-month", 1, 31, nil},
-	{"month", 1, 12, monthNames},
-	{"day-of-week", 0, 7, dowNames},
+// quartzDowNames follows the Quartz convention of SUN=1..SAT=7, one off
+// from the standard cron convention of SUN=0..SAT=6.
+var quartzDowNames = map[string]int{
+	"sun": 1, "mon": 2, "tue": 3, "wed": 4, "thu": 5, "fri": 6, "sat": 7,
 }
+
+var fields = []fieldSpec{
+	{"minute", 0, 59, nil, false},
+	{"hour", 0, 23, nil, false},
+	{"day-of-month", 1, 31, nil, false},
+	{"month", 1, 12, monthNames, false},
+	{"day-of-week", 0, 7, dowNames, false},
+}
+
+// quartzFields6 and quartzFields7 describe the Quartz scheduler's field
+// layout: seconds in front of the standard fields, plus an optional
+// trailing year. day-of-month and day-of-week each accept "?" since
+// Quartz requires exactly one of the pair to be unrestricted.
+var quartzFields6 = []fieldSpec{
+	{"second", 0, 59, nil, false},
+	{"minute", 0, 59, nil, false},
+	{"hour", 0, 23, nil, false},
+	{"day-of-month", 1, 31, nil, true},
+	{"month", 1, 12, monthNames, false},
+	{"day-of-week", 1, 7, quartzDowNames, true},
+}
+
+var quartzFields7 = append(append([]fieldSpec{}, quartzFields6...), fieldSpec{"year", 1970, 2099, nil, false})
 
 var namedSchedules = map[string]bool{
 	"@yearly": true, "@annually": true, "@monthly": true, "@weekly": true,
@@ -100,7 +125,7 @@ func lintField(spec fieldSpec, raw string, lineNum int) []Finding {
 			}
 		}
 
-		if body == "*" {
+		if body == "*" || (body == "?" && spec.allowQuestionMark) {
 			continue
 		}
 
@@ -134,6 +159,21 @@ func lintField(spec fieldSpec, raw string, lineNum int) []Finding {
 	return out
 }
 
+// isFieldToken guesses whether a token is a schedule field rather than
+// the start of the command. Cron fields never contain "." and use at
+// most one "/" (for the step value); real commands are almost always
+// paths, which have neither property. It's a heuristic, not a parser -
+// a command with no path separator or extension can still fool it.
+func isFieldToken(tok string) bool {
+	if tok == "" {
+		return false
+	}
+	if strings.Contains(tok, ".") {
+		return false
+	}
+	return strings.Count(tok, "/") <= 1
+}
+
 // lintLine checks one line of a crontab file. It returns nil for blank
 // lines, comments, and environment variable assignments.
 func lintLine(line string, lineNum int) []Finding {
@@ -161,20 +201,46 @@ func lintLine(line string, lineNum int) []Finding {
 		return nil
 	}
 
-	if len(tokens) < 6 {
-		return []Finding{{lineNum, "", fmt.Sprintf("expected 5 time fields plus a command, found %d fields", len(tokens))}}
+	// Count leading tokens that look like schedule fields to tell a
+	// standard 5-field crontab line apart from Quartz's 6 (with
+	// seconds) or 7 (with seconds and year).
+	fieldCount := 0
+	for fieldCount < len(tokens) && fieldCount < 7 && isFieldToken(tokens[fieldCount]) {
+		fieldCount++
+	}
+
+	if fieldCount < 5 {
+		return []Finding{{lineNum, "", fmt.Sprintf("expected 5, 6, or 7 time fields plus a command, found %d fields", fieldCount)}}
+	}
+	if fieldCount == len(tokens) {
+		return []Finding{{lineNum, "", "missing command after time fields"}}
+	}
+
+	var specs []fieldSpec
+	var domIdx, dowIdx int
+	switch fieldCount {
+	case 5:
+		specs, domIdx, dowIdx = fields, 2, 4
+	case 6:
+		specs, domIdx, dowIdx = quartzFields6, 3, 5
+	case 7:
+		specs, domIdx, dowIdx = quartzFields7, 3, 5
 	}
 
 	var findings []Finding
-	for i, spec := range fields {
+	for i, spec := range specs {
 		findings = append(findings, lintField(spec, tokens[i], lineNum)...)
 	}
 
-	domRestricted := tokens[2] != "*"
-	dowRestricted := tokens[4] != "*"
+	quartz := fieldCount >= 6
+	domRestricted := tokens[domIdx] != "*" && !(quartz && tokens[domIdx] == "?")
+	dowRestricted := tokens[dowIdx] != "*" && !(quartz && tokens[dowIdx] == "?")
 	if domRestricted && dowRestricted {
-		findings = append(findings, Finding{lineNum, "",
-			"day-of-month and day-of-week are both restricted; most cron daemons treat this as OR, not AND"})
+		msg := "day-of-month and day-of-week are both restricted; most cron daemons treat this as OR, not AND"
+		if quartz {
+			msg = "day-of-month and day-of-week are both restricted; Quartz requires one of them to be ?"
+		}
+		findings = append(findings, Finding{lineNum, "", msg})
 	}
 
 	return findings

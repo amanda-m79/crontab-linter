@@ -163,9 +163,58 @@ func TestLintLineNamedScheduleMissingCommand(t *testing.T) {
 }
 
 func TestLintLineTooFewFields(t *testing.T) {
-	got := lintLine("* * * * *", 1)
-	if !containsMessage(got, "expected 5 time fields plus a command") {
+	got := lintLine("* * * * /usr/bin/cmd.sh", 1)
+	if !containsMessage(got, "expected 5, 6, or 7 time fields plus a command, found 4 fields") {
 		t.Errorf("expected too-few-fields finding, got %v", findingMessages(got))
+	}
+}
+
+func TestLintLineMissingCommand(t *testing.T) {
+	got := lintLine("* * * * *", 1)
+	if !containsMessage(got, "missing command after time fields") {
+		t.Errorf("expected missing-command finding, got %v", findingMessages(got))
+	}
+}
+
+func TestLintLineQuartzSixFieldsValid(t *testing.T) {
+	got := lintLine("0 0 12 * * ? /usr/bin/noon.sh", 1)
+	if len(got) != 0 {
+		t.Errorf("lintLine(quartz 6-field) = %v, want no findings", findingMessages(got))
+	}
+}
+
+func TestLintLineQuartzSevenFieldsValid(t *testing.T) {
+	got := lintLine("0 0 12 * * ? 2030 /usr/bin/noon.sh", 1)
+	if len(got) != 0 {
+		t.Errorf("lintLine(quartz 7-field) = %v, want no findings", findingMessages(got))
+	}
+}
+
+func TestLintLineQuartzSeconds(t *testing.T) {
+	got := lintLine("99 0 12 * * ? /usr/bin/noon.sh", 1)
+	if !containsMessage(got, "value 99 out of range 0-59") {
+		t.Errorf("expected seconds out-of-range finding, got %v", findingMessages(got))
+	}
+}
+
+func TestLintLineQuartzDowNamesOneIndexed(t *testing.T) {
+	got := lintLine("0 0 12 ? * SUN /usr/bin/noon.sh", 1)
+	if len(got) != 0 {
+		t.Errorf("lintLine(quartz SUN) = %v, want no findings", findingMessages(got))
+	}
+}
+
+func TestLintLineQuartzDomDowBothRestricted(t *testing.T) {
+	got := lintLine("0 0 12 15 * MON /usr/bin/noon.sh", 1)
+	if !containsMessage(got, "Quartz requires one of them to be ?") {
+		t.Errorf("expected quartz dom/dow ambiguity finding, got %v", findingMessages(got))
+	}
+}
+
+func TestLintLineQuartzQuestionMarkOnlyOnDomDow(t *testing.T) {
+	got := lintLine("0 0 ? * * ? /usr/bin/noon.sh", 1)
+	if !containsMessage(got, `invalid value "?"`) {
+		t.Errorf("expected invalid value finding for ? on hour field, got %v", findingMessages(got))
 	}
 }
 

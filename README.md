@@ -48,9 +48,12 @@ in version control.
 
 ## What it checks today
 
-- each of the 5 time fields (minute, hour, day-of-month, month,
-  day-of-week) against its valid range
-- named months (`jan`-`dec`) and weekdays (`sun`-`sat`)
+- each of the 5 standard time fields (minute, hour, day-of-month,
+  month, day-of-week) against its valid range, or the 6/7 Quartz
+  fields (seconds, minute, hour, day-of-month, month, day-of-week,
+  year) when the line has that many
+- named months (`jan`-`dec`) and weekdays (`sun`-`sat`, or Quartz's
+  1-indexed `SUN`-`SAT`)
 - `@daily`, `@hourly`, `@reboot` and the other shorthand schedules
 - malformed or backwards ranges (`5-1`)
 - step values that are zero, negative, non-numeric, or larger than the
@@ -59,8 +62,15 @@ in version control.
 - duplicate values in a comma list
 - lines with too few fields, or a schedule keyword with no command
 - day-of-month and day-of-week both being restricted at once, which is
-  a common source of confusion since most cron implementations treat
-  that combination as OR rather than AND
+  a common source of confusion: most cron implementations treat that
+  combination as OR rather than AND, and Quartz requires one of the
+  two to be `?` for exactly this reason
+
+Whether a line is standard cron or Quartz is inferred from how many
+leading tokens look like schedule fields rather than the start of a
+command - a token containing `.` or more than one `/` is treated as
+the command. This is a heuristic: a command with no extension and no
+path separator can fool it.
 
 Lines starting with `#` are treated as comments, and lines that look
 like `NAME=value` are treated as environment variable assignments, both
@@ -69,9 +79,8 @@ of which are skipped.
 ## What it doesn't check yet
 
 There's no validation of the command field itself (path existence,
-quoting, etc.), and no support for Quartz-style 6/7 field cron or the
-`L`/`W`/`#` extensions some schedulers add. See the roadmap for what's
-planned.
+quoting, etc.), and no support for the `L`, `W`, and `#`
+day-of-month/day-of-week extensions some schedulers add.
 
 ## License
 
