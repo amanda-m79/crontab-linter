@@ -128,6 +128,60 @@ func TestLintFieldNamedValues(t *testing.T) {
 	}
 }
 
+func TestLintFieldDomExtensionsValid(t *testing.T) {
+	for _, raw := range []string{"L", "LW", "L-3", "15W", "1W"} {
+		got := lintField(fields[2], raw, 1)
+		if len(got) != 0 {
+			t.Errorf("lintField(day-of-month, %q) = %v, want no findings", raw, findingMessages(got))
+		}
+	}
+}
+
+func TestLintFieldDomExtensionsOutOfRange(t *testing.T) {
+	got := lintField(fields[2], "40W", 1)
+	if !containsMessage(got, "out of range") {
+		t.Errorf("lintField(day-of-month, 40W) = %v, want out-of-range finding", findingMessages(got))
+	}
+	got = lintField(fields[2], "L-99", 1)
+	if !containsMessage(got, "out of range for the month") {
+		t.Errorf("lintField(day-of-month, L-99) = %v, want out-of-range finding", findingMessages(got))
+	}
+}
+
+func TestLintFieldDowExtensionsValid(t *testing.T) {
+	for _, raw := range []string{"L", "5L", "FRIL", "5#3", "MON#1"} {
+		got := lintField(fields[4], raw, 1)
+		if len(got) != 0 {
+			t.Errorf("lintField(day-of-week, %q) = %v, want no findings", raw, findingMessages(got))
+		}
+	}
+}
+
+func TestLintFieldDowExtensionsInvalidOccurrence(t *testing.T) {
+	got := lintField(fields[4], "5#6", 1)
+	if !containsMessage(got, "must be 1-5") {
+		t.Errorf("lintField(day-of-week, 5#6) = %v, want invalid-occurrence finding", findingMessages(got))
+	}
+}
+
+func TestLintFieldDowExtensionsInvalidWeekday(t *testing.T) {
+	got := lintField(fields[4], "xyz#2", 1)
+	if !containsMessage(got, "invalid weekday") {
+		t.Errorf("lintField(day-of-week, xyz#2) = %v, want invalid-weekday finding", findingMessages(got))
+	}
+}
+
+func TestLintLineDomDowExtensionsQuartzValid(t *testing.T) {
+	got := lintLine("0 0 12 15W * ? /usr/bin/noon.sh", 1)
+	if len(got) != 0 {
+		t.Errorf("lintLine(quartz 15W) = %v, want no findings", findingMessages(got))
+	}
+	got = lintLine("0 0 12 ? * 6#3 /usr/bin/noon.sh", 1)
+	if len(got) != 0 {
+		t.Errorf("lintLine(quartz 6#3) = %v, want no findings", findingMessages(got))
+	}
+}
+
 func TestLintLineBlankAndComment(t *testing.T) {
 	for _, line := range []string{"", "   ", "# a comment", "  # indented comment"} {
 		if got := lintLine(line, 1); got != nil {

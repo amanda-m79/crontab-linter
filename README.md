@@ -65,6 +65,12 @@ in version control.
   a common source of confusion: most cron implementations treat that
   combination as OR rather than AND, and Quartz requires one of the
   two to be `?` for exactly this reason
+- the `L`, `W`, and `#` day-of-month/day-of-week extensions used by
+  Quartz and several modern cron implementations: `L` (last day of the
+  month, or last weekday in the day-of-week field), `LW` and `L-3`
+  (last weekday of the month, and 3 days before the last day), `15W`
+  (nearest weekday to the 15th), `6#3` (the third Friday of the month),
+  and the named-weekday equivalents (`FRIL`, `MON#1`)
 
 Whether a line is standard cron or Quartz is inferred from how many
 leading tokens look like schedule fields rather than the start of a
@@ -79,8 +85,7 @@ of which are skipped.
 ## What it doesn't check yet
 
 There's no validation of the command field itself (path existence,
-quoting, etc.), and no support for the `L`, `W`, and `#`
-day-of-month/day-of-week extensions some schedulers add.
+quoting, etc.), and no `--strict` mode or JSON output for CI tooling.
 
 ## License
 

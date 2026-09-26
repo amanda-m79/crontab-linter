@@ -32,6 +32,12 @@ type fieldSpec struct {
 	// the Quartz convention for the field of day-of-month/day-of-week
 	// that isn't otherwise restricted.
 	allowQuestionMark bool
+	// domExtensions and dowExtensions enable the "last"/"weekday"/"nth
+	// occurrence" syntax (L, W, #) that Quartz and several modern cron
+	// implementations accept on the day-of-month and day-of-week
+	// fields respectively.
+	domExtensions bool
+	dowExtensions bool
 }
 
 var monthNames = map[string]int{
@@ -50,11 +56,11 @@ var quartzDowNames = map[string]int{
 }
 
 var fields = []fieldSpec{
-	{"minute", 0, 59, nil, false},
-	{"hour", 0, 23, nil, false},
-	{"day-of-month", 1, 31, nil, false},
-	{"month", 1, 12, monthNames, false},
-	{"day-of-week", 0, 7, dowNames, false},
+	{"minute", 0, 59, nil, false, false, false},
+	{"hour", 0, 23, nil, false, false, false},
+	{"day-of-month", 1, 31, nil, false, true, false},
+	{"month", 1, 12, monthNames, false, false, false},
+	{"day-of-week", 0, 7, dowNames, false, false, true},
 }
 
 // quartzFields6 and quartzFields7 describe the Quartz scheduler's field
@@ -62,15 +68,15 @@ var fields = []fieldSpec{
 // trailing year. day-of-month and day-of-week each accept "?" since
 // Quartz requires exactly one of the pair to be unrestricted.
 var quartzFields6 = []fieldSpec{
-	{"second", 0, 59, nil, false},
-	{"minute", 0, 59, nil, false},
-	{"hour", 0, 23, nil, false},
-	{"day-of-month", 1, 31, nil, true},
-	{"month", 1, 12, monthNames, false},
-	{"day-of-week", 1, 7, quartzDowNames, true},
+	{"second", 0, 59, nil, false, false, false},
+	{"minute", 0, 59, nil, false, false, false},
+	{"hour", 0, 23, nil, false, false, false},
+	{"day-of-month", 1, 31, nil, true, true, false},
+	{"month", 1, 12, monthNames, false, false, false},
+	{"day-of-week", 1, 7, quartzDowNames, true, false, true},
 }
 
-var quartzFields7 = append(append([]fieldSpec{}, quartzFields6...), fieldSpec{"year", 1970, 2099, nil, false})
+var quartzFields7 = append(append([]fieldSpec{}, quartzFields6...), fieldSpec{"year", 1970, 2099, nil, false, false, false})
 
 var namedSchedules = map[string]bool{
 	"@yearly": true, "@annually": true, "@monthly": true, "@weekly": true,
@@ -80,6 +86,20 @@ var namedSchedules = map[string]bool{
 // envVarRe matches crontab lines that set an environment variable
 // (e.g. PATH=/usr/bin) rather than schedule a job.
 var envVarRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
+// domWRe matches "NW", the nearest weekday to day-of-month N.
+var domWRe = regexp.MustCompile(`^(\d+)W$`)
+
+// domLOffsetRe matches "L-N", N days before the last day of the month.
+var domLOffsetRe = regexp.MustCompile(`^L-(\d+)$`)
+
+// dowHashRe matches "N#M" or "NAME#M", the Mth occurrence of a weekday
+// in the month.
+var dowHashRe = regexp.MustCompile(`^([A-Za-z0-9]+)#(\d+)$`)
+
+// dowLRe matches "NL" or "NAMEL", the last occurrence of a weekday in
+// the month.
+var dowLRe = regexp.MustCompile(`^([A-Za-z0-9]+)L$`)
 
 func resolveValue(spec fieldSpec, token string) (int, bool) {
 	if n, err := strconv.Atoi(token); err == nil {
@@ -91,6 +111,66 @@ func resolveValue(spec fieldSpec, token string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// lintDomExtension checks the Quartz-style day-of-month forms L (last
+// day of the month), LW (last weekday of the month), L-N (N days
+// before the last day), and NW (the weekday nearest day N). It reports
+// whether body matched one of these forms at all, so the caller can
+// fall through to plain value/range parsing otherwise.
+func lintDomExtension(spec fieldSpec, body string, lineNum int) (bool, []Finding) {
+	upper := strings.ToUpper(body)
+	switch {
+	case upper == "L" || upper == "LW":
+		return true, nil
+	case domLOffsetRe.MatchString(upper):
+		n, _ := strconv.Atoi(domLOffsetRe.FindStringSubmatch(upper)[1])
+		if n < 0 || n > spec.max-spec.min {
+			return true, []Finding{{lineNum, spec.label, fmt.Sprintf("%q is out of range for the month", body)}}
+		}
+		return true, nil
+	case domWRe.MatchString(upper):
+		n, _ := strconv.Atoi(domWRe.FindStringSubmatch(upper)[1])
+		if n < spec.min || n > spec.max {
+			return true, []Finding{{lineNum, spec.label, fmt.Sprintf("day %d in %q is out of range %d-%d", n, body, spec.min, spec.max)}}
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// lintDowExtension checks the day-of-week forms N#M / NAME#M (the Mth
+// occurrence of a weekday in the month) and NL / NAMEL (the last
+// occurrence of a weekday in the month), plus a bare L (the last day
+// of the week, i.e. Saturday). It reports whether body matched one of
+// these forms at all, so the caller can fall through to plain
+// value/range parsing otherwise.
+func lintDowExtension(spec fieldSpec, body string, lineNum int) (bool, []Finding) {
+	if strings.EqualFold(body, "L") {
+		return true, nil
+	}
+	if m := dowHashRe.FindStringSubmatch(body); m != nil {
+		var out []Finding
+		if val, ok := resolveValue(spec, m[1]); !ok {
+			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("invalid weekday %q in %q", m[1], body)})
+		} else if val < spec.min || val > spec.max {
+			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("weekday %d in %q is out of range %d-%d", val, body, spec.min, spec.max)})
+		}
+		if occ, err := strconv.Atoi(m[2]); err != nil || occ < 1 || occ > 5 {
+			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("occurrence %q in %q must be 1-5", m[2], body)})
+		}
+		return true, out
+	}
+	if m := dowLRe.FindStringSubmatch(body); m != nil {
+		var out []Finding
+		if val, ok := resolveValue(spec, m[1]); !ok {
+			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("invalid weekday %q in %q", m[1], body)})
+		} else if val < spec.min || val > spec.max {
+			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("weekday %d in %q is out of range %d-%d", val, body, spec.min, spec.max)})
+		}
+		return true, out
+	}
+	return false, nil
 }
 
 // lintField checks a single cron field (e.g. "1-5,*/2") against its spec.
@@ -127,6 +207,19 @@ func lintField(spec fieldSpec, raw string, lineNum int) []Finding {
 
 		if body == "*" || (body == "?" && spec.allowQuestionMark) {
 			continue
+		}
+
+		if spec.domExtensions {
+			if handled, finds := lintDomExtension(spec, body, lineNum); handled {
+				out = append(out, finds...)
+				continue
+			}
+		}
+		if spec.dowExtensions {
+			if handled, finds := lintDowExtension(spec, body, lineNum); handled {
+				out = append(out, finds...)
+				continue
+			}
 		}
 
 		if strings.Contains(body, "-") {
