@@ -32,17 +32,28 @@ PATH=/usr/bin:/bin
 it prints:
 
 ```
-line 5: minute: step /1 on * is redundant, same as *
+line 5: minute: step /1 on * is redundant, same as * [style]
 line 6: minute: value 99 out of range 0-59
-line 8: day-of-month and day-of-week are both restricted; most cron daemons treat this as OR, not AND
+line 8: day-of-month and day-of-week are both restricted; most cron daemons treat this as OR, not AND [style]
 line 9: month: value 13 out of range 1-12
-line 10: expected 5 time fields plus a command, found 5 fields
+line 10: expected 5, 6, or 7 time fields plus a command, found 5 fields
 ```
 
 Findings are printed in the order the lines appear in the file, and a
 line can produce more than one finding if several fields have problems.
 
-Exit code is 1 if any findings were reported, 0 if the file is clean.
+Findings tagged `[style]` describe schedules that are valid and will
+run, but are redundant or probably not what was meant (a redundant
+`*/1`, a duplicate list value, a step larger than the field, dom and
+dow both restricted in standard cron). Everything else is an error.
+
+Exit code is 1 if any error was reported, 0 otherwise. Pass `--strict`
+to also exit 1 on style findings:
+
+```
+go run . --strict mycrontab
+```
+
 That makes it usable as a pre-commit or CI check on crontab files kept
 in version control.
 
@@ -85,7 +96,7 @@ of which are skipped.
 ## What it doesn't check yet
 
 There's no validation of the command field itself (path existence,
-quoting, etc.), and no `--strict` mode or JSON output for CI tooling.
+quoting, etc.), and no JSON output for CI tooling.
 
 ## License
 

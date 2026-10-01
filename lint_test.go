@@ -286,6 +286,50 @@ func TestLintLineDomDowBothRestricted(t *testing.T) {
 	}
 }
 
+func TestStyleFindingsAreNotErrors(t *testing.T) {
+	lines := []string{
+		"*/1 * * * * /usr/bin/heartbeat.sh",
+		"30 4 15 * 1 /usr/bin/ambiguous.sh",
+		"1,1 * * * * /usr/bin/dup.sh",
+		"*/90 * * * * /usr/bin/bigstep.sh",
+	}
+	for _, line := range lines {
+		got := lintLine(line, 1)
+		if len(got) == 0 {
+			t.Errorf("%q: expected a finding", line)
+			continue
+		}
+		if HasErrors(got) {
+			t.Errorf("%q: expected style-only findings, got %v", line, findingMessages(got))
+		}
+	}
+}
+
+func TestHardFindingsAreErrors(t *testing.T) {
+	lines := []string{
+		"99 5 * * * /usr/bin/broken.sh",
+		"0 0 1 13 * /usr/bin/bad-month.sh",
+		"0 0 0 15 * 1 /usr/bin/quartz-both.sh",
+		"* * * * *",
+	}
+	for _, line := range lines {
+		if !HasErrors(lintLine(line, 1)) {
+			t.Errorf("%q: expected an error finding", line)
+		}
+	}
+}
+
+func TestFindingStringMarksStyle(t *testing.T) {
+	got := nit(3, "minute", "step /1 on * is redundant, same as *").String()
+	want := "line 3: minute: step /1 on * is redundant, same as * [style]"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if s := problem(3, "", "bad").String(); strings.Contains(s, "[style]") {
+		t.Errorf("error finding should not be marked as style: %q", s)
+	}
+}
+
 func TestLintLinePropagatesFieldFindings(t *testing.T) {
 	got := lintLine("99 5 * * * /usr/bin/broken.sh", 7)
 	if !containsMessage(got, "value 99 out of range 0-59") {

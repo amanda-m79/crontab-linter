@@ -14,13 +14,43 @@ type Finding struct {
 	Line    int
 	Field   string
 	Message string
+	// Style marks findings about lines that are valid and will run, but
+	// probably don't do what the author meant or say it more clumsily than
+	// needed. They don't fail a run unless --strict is given.
+	Style bool
 }
 
 func (f Finding) String() string {
+	s := fmt.Sprintf("line %d: %s", f.Line, f.Message)
 	if f.Field != "" {
-		return fmt.Sprintf("line %d: %s: %s", f.Line, f.Field, f.Message)
+		s = fmt.Sprintf("line %d: %s: %s", f.Line, f.Field, f.Message)
 	}
-	return fmt.Sprintf("line %d: %s", f.Line, f.Message)
+	if f.Style {
+		s += " [style]"
+	}
+	return s
+}
+
+// problem builds a finding that makes the line wrong or unparseable.
+func problem(line int, field, format string, args ...any) Finding {
+	return Finding{Line: line, Field: field, Message: fmt.Sprintf(format, args...)}
+}
+
+// nit builds a style-only finding.
+func nit(line int, field, format string, args ...any) Finding {
+	f := problem(line, field, format, args...)
+	f.Style = true
+	return f
+}
+
+// HasErrors reports whether any finding is not style-only.
+func HasErrors(findings []Finding) bool {
+	for _, f := range findings {
+		if !f.Style {
+			return true
+		}
+	}
+	return false
 }
 
 type fieldSpec struct {
@@ -126,13 +156,13 @@ func lintDomExtension(spec fieldSpec, body string, lineNum int) (bool, []Finding
 	case domLOffsetRe.MatchString(upper):
 		n, _ := strconv.Atoi(domLOffsetRe.FindStringSubmatch(upper)[1])
 		if n < 0 || n > spec.max-spec.min {
-			return true, []Finding{{lineNum, spec.label, fmt.Sprintf("%q is out of range for the month", body)}}
+			return true, []Finding{problem(lineNum, spec.label, "%q is out of range for the month", body)}
 		}
 		return true, nil
 	case domWRe.MatchString(upper):
 		n, _ := strconv.Atoi(domWRe.FindStringSubmatch(upper)[1])
 		if n < spec.min || n > spec.max {
-			return true, []Finding{{lineNum, spec.label, fmt.Sprintf("day %d in %q is out of range %d-%d", n, body, spec.min, spec.max)}}
+			return true, []Finding{problem(lineNum, spec.label, "day %d in %q is out of range %d-%d", n, body, spec.min, spec.max)}
 		}
 		return true, nil
 	}
@@ -152,21 +182,21 @@ func lintDowExtension(spec fieldSpec, body string, lineNum int) (bool, []Finding
 	if m := dowHashRe.FindStringSubmatch(body); m != nil {
 		var out []Finding
 		if val, ok := resolveValue(spec, m[1]); !ok {
-			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("invalid weekday %q in %q", m[1], body)})
+			out = append(out, problem(lineNum, spec.label, "invalid weekday %q in %q", m[1], body))
 		} else if val < spec.min || val > spec.max {
-			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("weekday %d in %q is out of range %d-%d", val, body, spec.min, spec.max)})
+			out = append(out, problem(lineNum, spec.label, "weekday %d in %q is out of range %d-%d", val, body, spec.min, spec.max))
 		}
 		if occ, err := strconv.Atoi(m[2]); err != nil || occ < 1 || occ > 5 {
-			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("occurrence %q in %q must be 1-5", m[2], body)})
+			out = append(out, problem(lineNum, spec.label, "occurrence %q in %q must be 1-5", m[2], body))
 		}
 		return true, out
 	}
 	if m := dowLRe.FindStringSubmatch(body); m != nil {
 		var out []Finding
 		if val, ok := resolveValue(spec, m[1]); !ok {
-			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("invalid weekday %q in %q", m[1], body)})
+			out = append(out, problem(lineNum, spec.label, "invalid weekday %q in %q", m[1], body))
 		} else if val < spec.min || val > spec.max {
-			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("weekday %d in %q is out of range %d-%d", val, body, spec.min, spec.max)})
+			out = append(out, problem(lineNum, spec.label, "weekday %d in %q is out of range %d-%d", val, body, spec.min, spec.max))
 		}
 		return true, out
 	}
@@ -180,11 +210,11 @@ func lintField(spec fieldSpec, raw string, lineNum int) []Finding {
 
 	for _, part := range strings.Split(raw, ",") {
 		if part == "" {
-			out = append(out, Finding{lineNum, spec.label, "empty value in list"})
+			out = append(out, problem(lineNum, spec.label, "empty value in list"))
 			continue
 		}
 		if seen[part] {
-			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("duplicate value %q", part)})
+			out = append(out, nit(lineNum, spec.label, "duplicate value %q", part))
 		}
 		seen[part] = true
 
@@ -197,11 +227,11 @@ func lintField(spec fieldSpec, raw string, lineNum int) []Finding {
 			n, err := strconv.Atoi(step)
 			switch {
 			case err != nil || n <= 0:
-				out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("step %q must be a positive integer", step)})
+				out = append(out, problem(lineNum, spec.label, "step %q must be a positive integer", step))
 			case body == "*" && n == 1:
-				out = append(out, Finding{lineNum, spec.label, "step /1 on * is redundant, same as *"})
+				out = append(out, nit(lineNum, spec.label, "step /1 on * is redundant, same as *"))
 			case n > spec.max-spec.min+1:
-				out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("step %d is larger than the field's range", n)})
+				out = append(out, nit(lineNum, spec.label, "step %d is larger than the field's range", n))
 			}
 		}
 
@@ -227,25 +257,25 @@ func lintField(spec fieldSpec, raw string, lineNum int) []Finding {
 			start, okStart := resolveValue(spec, bits[0])
 			end, okEnd := resolveValue(spec, bits[1])
 			if !okStart || !okEnd {
-				out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("invalid range %q", body)})
+				out = append(out, problem(lineNum, spec.label, "invalid range %q", body))
 				continue
 			}
 			if start < spec.min || start > spec.max || end < spec.min || end > spec.max {
-				out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("range %q out of bounds %d-%d", body, spec.min, spec.max)})
+				out = append(out, problem(lineNum, spec.label, "range %q out of bounds %d-%d", body, spec.min, spec.max))
 			}
 			if start > end {
-				out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("range %q has start greater than end", body)})
+				out = append(out, problem(lineNum, spec.label, "range %q has start greater than end", body))
 			}
 			continue
 		}
 
 		val, ok := resolveValue(spec, body)
 		if !ok {
-			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("invalid value %q", body)})
+			out = append(out, problem(lineNum, spec.label, "invalid value %q", body))
 			continue
 		}
 		if val < spec.min || val > spec.max {
-			out = append(out, Finding{lineNum, spec.label, fmt.Sprintf("value %d out of range %d-%d", val, spec.min, spec.max)})
+			out = append(out, problem(lineNum, spec.label, "value %d out of range %d-%d", val, spec.min, spec.max))
 		}
 	}
 
@@ -286,10 +316,10 @@ func lintLine(line string, lineNum int) []Finding {
 	if strings.HasPrefix(tokens[0], "@") {
 		name := strings.ToLower(tokens[0])
 		if !namedSchedules[name] {
-			return []Finding{{lineNum, "", fmt.Sprintf("unknown schedule keyword %q", tokens[0])}}
+			return []Finding{problem(lineNum, "", "unknown schedule keyword %q", tokens[0])}
 		}
 		if len(tokens) < 2 {
-			return []Finding{{lineNum, "", "missing command after schedule keyword"}}
+			return []Finding{problem(lineNum, "", "missing command after schedule keyword")}
 		}
 		return nil
 	}
@@ -303,10 +333,10 @@ func lintLine(line string, lineNum int) []Finding {
 	}
 
 	if fieldCount < 5 {
-		return []Finding{{lineNum, "", fmt.Sprintf("expected 5, 6, or 7 time fields plus a command, found %d fields", fieldCount)}}
+		return []Finding{problem(lineNum, "", "expected 5, 6, or 7 time fields plus a command, found %d fields", fieldCount)}
 	}
 	if fieldCount == len(tokens) {
-		return []Finding{{lineNum, "", "missing command after time fields"}}
+		return []Finding{problem(lineNum, "", "missing command after time fields")}
 	}
 
 	var specs []fieldSpec
@@ -329,11 +359,12 @@ func lintLine(line string, lineNum int) []Finding {
 	domRestricted := tokens[domIdx] != "*" && !(quartz && tokens[domIdx] == "?")
 	dowRestricted := tokens[dowIdx] != "*" && !(quartz && tokens[dowIdx] == "?")
 	if domRestricted && dowRestricted {
-		msg := "day-of-month and day-of-week are both restricted; most cron daemons treat this as OR, not AND"
 		if quartz {
-			msg = "day-of-month and day-of-week are both restricted; Quartz requires one of them to be ?"
+			// Quartz rejects the schedule outright, so this is a real error.
+			findings = append(findings, problem(lineNum, "", "day-of-month and day-of-week are both restricted; Quartz requires one of them to be ?"))
+		} else {
+			findings = append(findings, nit(lineNum, "", "day-of-month and day-of-week are both restricted; most cron daemons treat this as OR, not AND"))
 		}
-		findings = append(findings, Finding{lineNum, "", msg})
 	}
 
 	return findings
